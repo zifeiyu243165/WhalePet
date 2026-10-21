@@ -1,0 +1,35 @@
+# ---- 构建产物 ----
+/build/
+/dist/
+*.apk
+*.idsig
+# 由模板 + catalog.json 生成，构建/测试时自动重建
+/android/assets/pet.html
+/web/index.html
+
+# ---- 构建工具链（JDK 17 + build-tools 34 + platform 34，体积近 600MB）----
+.toolchain/
+
+# ---- 签名密钥：自签用，绝不入库 ----
+/keystore/
+*.jks
+*.keystore
+
+# ---- 临时文件、调试截图 ----
+/.tmp/
+
+# ---- 依赖 ----
+node_modules/
+package-lock.json
+
+# ---- 编辑器与系统 ----
+.idea/
+.vscode/
+*.iml
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 日志 ----
+*.log

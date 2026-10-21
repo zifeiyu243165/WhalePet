@@ -1,0 +1,1170 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
+<title>大肥鱼</title>
+<style>
+  :root{
+    --pw: 96px;                /* 角色宽度（px = dp），由原生注入 */
+    --op: 1;
+    --lift: 0px;
+    --fg: #eaf2ff;
+    --sub: rgba(198,215,240,.62);
+    --dim: rgba(160,184,214,.42);
+    --line: rgba(255,255,255,.09);
+    --accent: #4d8dff;
+    --cyan: #6fd6ff;
+    /* 视频在角色包围盒里的定位参数（实测包围盒反推） */
+    --vL: -75.97%;
+    --vT: -9.869%;
+    --vW: 248.062%;
+    --vH: 118.42%;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;margin:0;background:transparent !important;background-color:transparent !important}
+  body{
+    font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    color:var(--fg);overflow:hidden;overscroll-behavior:none;
+    user-select:none;-webkit-user-select:none;
+  }
+
+  #stage{position:fixed;inset:0;background:transparent;background-color:transparent}
+
+  #pet{
+    position:absolute;left:50%;bottom:var(--lift);
+    width:var(--pw);height:calc(var(--pw) * 1.1783);
+    margin-left:calc(var(--pw) / -2);
+    /* 这一层绝对不能带 opacity<1 / transform / filter / will-change：
+       任何一个都会让 WebView 把子树先渲进离屏 buffer，而视频纹理在这种
+       离屏合成里经常被当成不透明源，角色身后就多出一块矩形底。
+       透明度改由 canvas 自己承担（见 #cv）。 */
+  }
+
+  /* ===== 解码器容器 =====
+     Android WebView 有一条「video hole punching」直通路径：它把视频帧直接送到
+     一块独立的 Surface 上，完全不理 CSS 的 opacity / clip / 层级 / z-index。
+     只要 <video> 还按 248%×118% 的尺寸参与布局，那块 Surface 就会在屏幕上盖出
+     一块不透明矩形 —— 这正好能解释「上一版加了 canvas 中转，方框照旧」。
+     所以把视频元素缩到 2×2 像素丢在左上角：Surface 最大也就 2×2。
+     drawImage 仍然能取到完整帧（用的是 videoWidth/videoHeight 元数据，与显示
+     尺寸无关），所以 canvas 那条路一点不受影响。 */
+  #dec{
+    position:fixed;left:0;top:0;width:2px;height:2px;
+    overflow:hidden;opacity:.01;pointer-events:none;contain:strict;
+  }
+  #dec video{
+    display:block;width:2px;height:2px;
+    background:transparent !important;background-color:transparent !important;
+    pointer-events:none;
+  }
+
+  /* ===== 画面的唯一出口：canvas =====
+     整条链路上只有这一处带透明度，且 canvas 是叶子节点，opacity 作为图层
+     alpha 应用，不会触发子孙离屏。不加 transform / 滤镜 / 阴影 / will-change。 */
+  #cv{
+    position:absolute;left:0;top:0;width:100%;height:100%;
+    display:none;pointer-events:none;
+    opacity:var(--op);
+    background:transparent !important;background-color:transparent !important;
+  }
+  #pet.cv #cv{display:block}
+
+  /* 菜单窗口扩展时保持角色的屏幕坐标，不隐藏角色。 */
+  body.menu #pet{
+    position:fixed;left:var(--anchor-x);top:var(--anchor-y);
+    bottom:auto;margin-left:0;transition:none;
+  }
+
+  /* 命中区：椭圆裁切，四角透明处不响应 */
+  #hit{
+    position:absolute;left:0;top:0;width:100%;height:100%;
+    clip-path:ellipse(46% 48% at 50% 52%);
+  }
+  /* ---------- 遮罩 ---------- */
+  #mask{
+    position:fixed;inset:0;z-index:20;
+    background:radial-gradient(120% 80% at 50% 100%, rgba(6,12,24,.62), rgba(4,8,16,.42));
+    opacity:0;pointer-events:none;transition:opacity .2s ease;
+  }
+  #mask.on{opacity:1;pointer-events:auto}
+
+  /* ---------- 动作库 / 设置 弹层 ---------- */
+  #sheet{
+    position:fixed;left:0;right:0;bottom:0;z-index:21;
+    display:flex;flex-direction:column;
+    max-height:58vh;min-height:34vh;
+    background:
+      radial-gradient(120% 90% at 12% 0%, rgba(77,141,255,.20), rgba(77,141,255,0) 60%),
+      radial-gradient(90% 80% at 100% 4%, rgba(111,214,255,.14), rgba(111,214,255,0) 58%),
+      linear-gradient(180deg,#121C31 0%,#0B1322 52%,#080D18 100%);
+    border-top:1px solid rgba(255,255,255,.11);
+    border-radius:24px 24px 0 0;
+    box-shadow:0 -18px 46px rgba(3,7,16,.6), inset 0 1px 0 rgba(255,255,255,.07);
+    visibility:hidden;pointer-events:none;
+    transform:translateY(112%);
+    transition:transform .32s cubic-bezier(.22,1,.36,1), visibility 0s .32s;
+    will-change:transform;
+    padding-bottom:10px;
+  }
+  #sheet.on{visibility:visible;pointer-events:auto;transform:translateY(0);transition-delay:0s}
+
+  .grab{width:38px;height:4px;border-radius:999px;background:rgba(255,255,255,.22);margin:8px auto 2px;flex:0 0 auto}
+
+  /* 顶部横幅 */
+  .hero{
+    position:relative;height:80px;margin:2px 14px 9px;border-radius:16px;overflow:hidden;
+    background:#0d1524 center 34%/cover no-repeat;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);
+    flex:0 0 auto;
+  }
+  .hero::after{
+    content:"";position:absolute;inset:0;
+    background:linear-gradient(100deg, rgba(8,13,24,.90) 0%, rgba(8,13,24,.62) 34%, rgba(8,13,24,.14) 72%, rgba(8,13,24,.05) 100%);
+  }
+  .heroTxt{position:absolute;left:14px;bottom:11px;z-index:2}
+  .heroTxt b{display:block;font-size:15px;font-weight:600;letter-spacing:.3px}
+  .heroTxt span{display:block;margin-top:3px;font-size:11px;color:rgba(190,212,240,.66)}
+
+  .tabs{position:absolute;right:10px;bottom:10px;z-index:2;display:flex;gap:6px}
+  .tab{
+    font-size:12px;padding:6px 12px;border-radius:999px;
+    border:1px solid rgba(255,255,255,.16);color:rgba(226,238,255,.78);
+    background:rgba(8,13,24,.66);
+  }
+  .tab.on{
+    color:#fff;border-color:rgba(120,178,255,.72);
+    background:linear-gradient(180deg, rgba(77,141,255,.5), rgba(77,141,255,.28));
+    box-shadow:0 2px 10px rgba(60,120,240,.28);
+  }
+
+  .body{flex:1 1 auto;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch;padding:0 14px 6px}
+
+  /* 变体选择 */
+  .vars{display:flex;gap:7px;padding:2px 0 9px;overflow-x:auto;scrollbar-width:none}
+  .vars::-webkit-scrollbar{display:none}
+  .vchip{
+    flex:0 0 auto;font-size:11.5px;padding:7px 11px;border-radius:999px;
+    border:1px solid rgba(255,255,255,.12);color:rgba(226,238,255,.7);
+    background:rgba(255,255,255,.04);white-space:nowrap;
+  }
+  .vchip.on{
+    color:#0a1424;font-weight:600;border-color:transparent;
+    background:linear-gradient(135deg,#8fd3ff,#5f9dff);
+    box-shadow:0 3px 12px rgba(95,157,255,.34);
+  }
+
+  /* 分类 */
+  .cats{
+    display:flex;gap:7px;overflow-x:auto;padding:4px 0 10px;scrollbar-width:none;
+    position:sticky;top:0;z-index:4;
+    background:linear-gradient(180deg,#101a2c 0%,#0f1929 78%,rgba(15,25,41,0) 100%);
+  }
+  .cats::-webkit-scrollbar{display:none}
+  .cat{
+    flex:0 0 auto;display:flex;align-items:center;gap:5px;
+    font-size:12.5px;padding:7px 11px;border-radius:999px;white-space:nowrap;
+    border:1px solid rgba(255,255,255,.12);color:rgba(222,235,255,.68);
+    background:rgba(255,255,255,.035);
+  }
+  .cat i{font-style:normal;font-size:10.5px;color:rgba(150,180,220,.6)}
+  .cat.on{
+    color:#fff;border-color:rgba(110,170,255,.62);
+    background:linear-gradient(180deg, rgba(77,141,255,.4), rgba(77,141,255,.22));
+  }
+  .cat.on i{color:rgba(226,240,255,.8)}
+
+  /* 动作格子 */
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:9px;padding-bottom:8px}
+  .item{
+    position:relative;display:flex;flex-direction:column;gap:4px;
+    padding:11px 12px 10px 14px;border-radius:14px;
+    border:1px solid rgba(255,255,255,.08);
+    background:linear-gradient(180deg, rgba(255,255,255,.065), rgba(255,255,255,.022));
+    box-shadow:0 2px 10px rgba(2,6,14,.28), inset 0 1px 0 rgba(255,255,255,.05);
+    transition:transform .1s ease, background .12s;
+  }
+  .item::before{
+    content:"";position:absolute;left:6px;top:12px;bottom:12px;width:2.5px;border-radius:2px;
+    background:hsl(var(--c,215) 82% 64%);opacity:.85;
+  }
+  .item:active{transform:scale(.975);background:linear-gradient(180deg, rgba(77,141,255,.3), rgba(77,141,255,.16));border-color:rgba(110,170,255,.5)}
+  .item .nm{font-size:13px;line-height:1.3}
+  .item .tg{font-size:10.5px;color:rgba(160,186,220,.5)}
+  /* 「我的」分类里的删除角标 */
+  .item .del{
+    position:absolute;right:6px;top:6px;width:21px;height:21px;line-height:19px;text-align:center;
+    border-radius:50%;font-size:14px;color:rgba(255,168,168,.9);
+    background:rgba(255,90,90,.14);border:1px solid rgba(255,120,120,.3);
+  }
+  .item .del:active{background:rgba(255,90,90,.3)}
+
+  /* 动作库滚动提示条：滑动时亮起，静止后淡出 */
+  #sbar{
+    position:absolute;right:7px;width:3.5px;z-index:6;
+    pointer-events:none;opacity:0;transition:opacity .28s ease;border-radius:999px;
+  }
+  #sbar.on{opacity:1}
+  #sbar b{
+    position:absolute;left:0;width:3.5px;border-radius:999px;
+    background:linear-gradient(180deg, rgba(160,208,255,.95), rgba(95,157,255,.78));
+    box-shadow:0 0 9px rgba(95,157,255,.55);
+    transition:transform .06s linear, height .12s ease;
+  }
+
+  /* 分类行右侧渐隐：暗示还能往右滑 */
+  .cats{
+    -webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 20px),transparent 100%);
+    mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 20px),transparent 100%);
+    padding-right:20px;
+  }
+
+  /* 设置行 */
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 4px;border-bottom:1px solid rgba(255,255,255,.06);font-size:13.5px}
+  .row:last-child{border-bottom:0}
+  .row label{color:rgba(224,236,255,.86)}
+  .row .val{font-weight:500;color:rgba(180,205,235,.55);font-size:12px;margin-left:4px}
+  input[type=range]{width:46%;accent-color:var(--accent);height:22px}
+  .sw{width:44px;height:26px;border-radius:999px;background:rgba(255,255,255,.14);position:relative;transition:background .18s;flex:0 0 auto}
+  .sw::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:transform .18s;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+  .sw.on{background:linear-gradient(135deg,#6fb2ff,#4d8dff)}
+  .sw.on::after{transform:translateX(18px)}
+  .btn{
+    padding:8px 14px;border-radius:11px;border:1px solid rgba(255,255,255,.13);
+    background:rgba(255,255,255,.055);color:var(--fg);font-size:12.5px;
+  }
+  .btn:active{background:rgba(77,141,255,.24)}
+  .btn.warn{color:#ff9a9a;border-color:rgba(255,120,120,.3)}
+  .btn.primary{
+    color:#fff;border-color:rgba(120,178,255,.56);
+    background:linear-gradient(180deg, rgba(77,141,255,.44), rgba(77,141,255,.24));
+  }
+
+  #toast{
+    position:fixed;left:50%;bottom:calc(var(--lift) + 12px);
+    transform:translateX(-50%) translateY(8px);
+    background:rgba(9,15,27,.95);border:1px solid rgba(255,255,255,.12);color:#fff;
+    font-size:12px;padding:8px 14px;border-radius:999px;opacity:0;pointer-events:none;
+    transition:opacity .18s,transform .18s;max-width:82vw;text-align:center;z-index:30;
+    box-shadow:0 8px 24px rgba(2,6,14,.5);
+  }
+  #toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+  .hidden{display:none !important}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="pet">
+    <canvas id="cv"></canvas>
+    <div id="hit"></div>
+  </div>
+  <!-- 视频解码器：2×2 像素藏在左上角，只负责解码，不出现在画面上 -->
+  <div id="dec">
+    <video id="vA" muted playsinline webkit-playsinline preload="auto" disablepictureinpicture></video>
+    <video id="vB" muted playsinline webkit-playsinline preload="auto" disablepictureinpicture></video>
+  </div>
+</div>
+
+<div id="mask"></div>
+<div id="sheet">
+  <div class="grab"></div>
+  <div class="hero" id="hero">
+    <div class="heroTxt">
+      <b id="sheetTitle">大肥鱼 · 动作库</b>
+      <span id="sheetSub">95 个动作 · 4 种变体</span>
+    </div>
+    <div class="tabs">
+      <div class="tab on" data-tab="lib">动作</div>
+      <div class="tab" data-tab="set">设置</div>
+    </div>
+  </div>
+
+  <div class="body" id="paneLib">
+    <div class="vars" id="vars">
+      <div class="vchip on" data-v="auto">随机</div>
+      <div class="vchip" data-v="normal">原样</div>
+      <div class="vchip" data-v="mirror">镜像</div>
+      <div class="vchip" data-v="slow">慢放</div>
+      <div class="vchip" data-v="mirrorSlow">镜像慢放</div>
+      <div class="vchip" data-v="chain">串烧</div>
+    </div>
+    <div class="cats" id="cats"></div>
+    <div class="grid" id="grid"></div>
+    <div id="sbar"><b id="sbarThumb"></b></div>
+  </div>
+
+  <div class="body hidden" id="paneSet">
+    <div class="row"><label>大小<b class="val" id="vSize"></b></label><input id="rSize" type="range" min="60" max="300" step="4" /></div>
+    <div class="row"><label>透明度<b class="val" id="vOp"></b></label><input id="rOp" type="range" min="30" max="100" step="5" /></div>
+    <div class="row"><label>导入动画<b class="val" id="vMy"></b></label><button class="btn primary" id="btnImport">选择文件</button></div>
+    <div class="row"><label>自动漫游</label><div class="sw" id="swRoam"></div></div>
+    <div class="row"><label>点击行为</label><button class="btn" id="swTap">全部动作随机</button></div>
+    <div class="row"><label>换一个常驻动作</label><button class="btn" id="btnIdle">随机</button></div>
+    <div class="row"><label>更多设置（桌面常驻 / 只在桌面显示）</label><button class="btn primary" id="btnCfg">打开</button></div>
+    <div class="row"><label>关闭桌宠</label><button class="btn warn" id="btnQuit">关闭</button></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script id="catalog" type="application/json">/*__CATALOG__*/</script>
+<script>
+(function () {
+  'use strict';
+  var AND = window.Android || null;
+
+  var CAT = JSON.parse(document.getElementById('catalog').textContent);
+  var byCat = {};
+  CAT.items.forEach(function (it) { (byCat[it.category] = byCat[it.category] || []).push(it); });
+
+  var CAT_NAME = {
+    idle:'待机', turn:'转向', moves:'移动', clicks:'点她', drag:'拖拽',
+    daily:'日常', work:'工作', games:'游戏', music:'音乐舞蹈',
+    food:'美食', festivals:'节日', seasonal:'四季', magic:'魔术',
+    fun:'趣味', special:'鲸鱼特色', memes:'梗图', my:'我的'
+  };
+
+  var FILE_MODE = location.protocol === 'file:';
+  var ASSET = FILE_MODE ? '' : '/';
+  var MEDIA = ASSET + 'media/thumb/';
+
+  // 变体：镜像用 CSS 翻转（零成本），慢放用播放速率
+  var VARS = {
+    normal:     { rate: 1,    flip: 0, label: '' },
+    mirror:     { rate: 1,    flip: 1, label: '镜像' },
+    slow:       { rate: 0.62, flip: 0, label: '慢放' },
+    mirrorSlow: { rate: 0.62, flip: 1, label: '镜像慢放' }
+  };
+  var AUTO_POOL = ['normal','normal','normal','mirror','mirror','slow','mirrorSlow'];
+
+  var cfg = {
+    w: 96, op: 100, roam: true, tapMode: 'all', variant: 'auto', idle: 'breathing'
+  };
+  var BOOT_CLIPS = [];
+  if (AND && AND.getConfig) {
+    try {
+      var s = JSON.parse(AND.getConfig() || '{}');
+      Object.keys(cfg).forEach(function (k) { if (s[k] !== undefined) cfg[k] = s[k]; });
+      if (s.clips && s.clips.length) BOOT_CLIPS = s.clips;
+    } catch (e) {}
+  }
+  function persist() { if (AND && AND.saveConfig) { try { AND.saveConfig(JSON.stringify(cfg)); } catch (e) {} } }
+
+  var pet = document.getElementById('pet');
+  var hit = document.getElementById('hit');
+  var vids = [document.getElementById('vA'), document.getElementById('vB')];
+  var cur = 0, playing = null;
+  var playSeq = 0, chain = [];
+  var idleTimer = null, backTimer = null, stallTimer = null, roamTimer = null;
+  var toastEl = document.getElementById('toast');
+
+  // ---------- 自动透明渲染 ----------
+  // 视频在 #pet 里只露出一小块（按角色包围盒裁的），这里记的就是露出比例。
+  // 来源：CSS 的 --vL:-75.97% --vT:-9.869% --vW:248.062% --vH:118.42%
+  var VIEW = { l: 75.97 / 248.062, w: 100 / 248.062, t: 9.869 / 118.42, h: 100 / 118.42 };
+
+  var cvs = document.getElementById('cv');
+  var cg = null;
+  var cvOn = false;      // canvas 是否接管画面
+  var cvKey = false;     // 是否需要色键（视频 alpha 在解码层就丢了）
+  var cvRaf = 0;
+  var cvFlip = false;    // 左右朝向。canvas 模式下用画布翻转，不动 #pet 的 transform
+  var bgRgb = [0, 0, 0];
+  var ks = null, kg = null;      // 键控离屏画布（见 keyCtx）
+  var KEY_LO = 26, KEY_HI = 96;   // 与"背景色"的距离阈值
+
+  function fitCanvas() {
+    var pw = pet.clientWidth || cfg.w;
+    var ph = pet.clientHeight || Math.round(cfg.w * 1.1783);
+    var dpr = Math.min(window.devicePixelRatio || 1, cvKey ? 2.2 : 3);
+    var W = Math.max(32, Math.round(pw * dpr));
+    var H = Math.max(32, Math.round(ph * dpr));
+    var cap = cvKey ? 52000 : 120000;    // 键控要逐像素跑，尺寸再收一收
+    if (W * H > cap) {
+      var k = Math.sqrt(cap / (W * H));
+      W = Math.max(32, Math.round(W * k));
+      H = Math.max(32, Math.round(H * k));
+    }
+    if (cvs.width !== W || cvs.height !== H) { cvs.width = W; cvs.height = H; }
+  }
+
+  function ensureCtx() {
+    if (cg) return cg;
+    // 关键：上屏用的这个 canvas 永远不要 willReadFrequently。
+    // 带上它 Chromium 会把画布改成 CPU 后端，某些 WebView 再把这块位图当
+    // 不透明纹理上传 —— 角色之外就糊上一层底。逐像素读写的活儿交给下面的离屏画布。
+    try {
+      cg = cvs.getContext('2d', { alpha: true });
+    } catch (e) {
+      cg = cvs.getContext('2d');
+    }
+    try { cg.imageSmoothingEnabled = true; cg.imageSmoothingQuality = 'high'; } catch (e) {}
+    return cg;
+  }
+
+  /** 键控专用的离屏画布：这里才允许 willReadFrequently */
+  function keyCtx(W, H) {
+    if (!ks) { ks = document.createElement('canvas'); kg = null; }
+    if (ks.width !== W || ks.height !== H) { ks.width = W; ks.height = H; kg = null; }
+    if (!kg) {
+      try { kg = ks.getContext('2d', { willReadFrequently: true, alpha: true }); }
+      catch (e) { kg = ks.getContext('2d'); }
+    }
+    return kg;
+  }
+
+  /** 探一下这台设备的 WebView 到底有没有把视频的 alpha 交到 JS 手里 */
+  function probeAlpha(v, cb) {
+    var out = null;
+    try {
+      var W = 64, H = 36;
+      var c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      var g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(v, 0, 0, W, H);
+      var d = g.getImageData(0, 0, W, H).data;
+      var clear = 0, semi = 0, n = W * H;
+      for (var i = 0; i < d.length; i += 4) {
+        // 注意别拿 ===0 当判据：VP9 的 alpha 平面是有损编码，本该全透明的地方
+        // 解出来是 1~30 的残值，拿精确 0 去数会误判成"这台设备没有 alpha"。
+        if (d[i + 3] < 60) clear++;
+        else if (d[i + 3] < 250) semi++;
+      }
+      // 角色永远在画面正中 —— 拿整帧最外一圈当"背景色"。
+      // 用中位数而不是均值：VP9 有损编码的边角偶尔会冒出极值，均值会被带偏。
+      var rs = [], gs = [], bs = [];
+      function push(i2) { rs.push(d[i2]); gs.push(d[i2 + 1]); bs.push(d[i2 + 2]); }
+      for (var x = 0; x < W; x++) { push(x * 4); push(((H - 1) * W + x) * 4); }
+      for (var y = 1; y < H - 1; y++) { push(y * W * 4); push((y * W + W - 1) * 4); }
+      function med(a) { a.sort(function (p, q) { return p - q; }); return a[a.length >> 1]; }
+      out = {
+        clear: clear / n, semi: semi / n,
+        bg: [med(rs), med(gs), med(bs)]
+      };
+    } catch (e) { out = null; }
+    cb(out);
+  }
+
+  function keyOut(d) {
+    var br = bgRgb[0], bgc = bgRgb[1], bb = bgRgb[2];
+    var LO2 = KEY_LO * KEY_LO, HI2 = KEY_HI * KEY_HI, span = HI2 - LO2;
+    for (var i = 0, n = d.length; i < n; i += 4) {
+      var dr = d[i] - br, dg = d[i + 1] - bgc, db = d[i + 2] - bb;
+      var d2 = dr * dr + dg * dg + db * db;
+      if (d2 <= LO2) {
+        d[i] = 0; d[i + 1] = 0; d[i + 2] = 0; d[i + 3] = 0;
+      } else if (d2 >= HI2) {
+        d[i + 3] = 255;
+      } else {
+        var a = (d2 - LO2) / span;
+        a = a * a;      // 平方一下，让贴着背景的那圈编码噪声直接归零，边缘更干净
+        // 重新预乘一次：设备若把未预乘数据又除了一遍，边缘会发白，乘回去才正常
+        d[i] = d[i] * a; d[i + 1] = d[i + 1] * a; d[i + 2] = d[i + 2] * a;
+        d[i + 3] = a * 255;
+      }
+    }
+  }
+
+  function cvTick() {
+    cvRaf = requestAnimationFrame(cvTick);
+    if (!cvOn) return;
+    var v = vids[cur];
+    if (!v || v.readyState < 2 || !v.videoWidth) return;
+    var g = ensureCtx();
+    if (!g) return;
+    var W = cvs.width, H = cvs.height;
+    var vw = v.videoWidth, vh = v.videoHeight;
+    var sx = VIEW.l * vw, sy = VIEW.t * vh, sw = VIEW.w * vw, sh = VIEW.h * vh;
+
+    if (!cvKey) {
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.clearRect(0, 0, W, H);
+      if (cvFlip) g.setTransform(-1, 0, 0, 1, W, 0);
+      g.drawImage(v, sx, sy, sw, sh, 0, 0, W, H);
+      g.setTransform(1, 0, 0, 1, 0, 0);
+    } else {
+      // 键控在离屏画布上做，做完再整块贴到上屏画布：
+      // 上屏画布因此始终是普通 GPU 画布，不会被当成 CPU 位图上传。
+      var gk = keyCtx(W, H);
+      if (!gk) { return; }
+      gk.setTransform(1, 0, 0, 1, 0, 0);
+      gk.clearRect(0, 0, W, H);
+      gk.drawImage(v, sx, sy, sw, sh, 0, 0, W, H);
+      var img;
+      try { img = gk.getImageData(0, 0, W, H); } catch (e) { return; }
+      keyOut(img.data);
+      gk.putImageData(img, 0, 0);
+
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.clearRect(0, 0, W, H);
+      if (cvFlip) g.setTransform(-1, 0, 0, 1, W, 0);
+      g.drawImage(ks, 0, 0);
+      g.setTransform(1, 0, 0, 1, 0, 0);
+    }
+
+  }
+
+  // 自动渲染始终通过透明画布输出。
+  function setRender() {
+    fitCanvas();
+    ensureCtx();
+    cvOn = true;
+    pet.classList.add('cv');
+    if (!cvRaf) cvRaf = requestAnimationFrame(cvTick);
+  }
+
+  // 唯一渲染入口：根据解码帧的 alpha 自动决定是否需要修复背景。
+  function initRender(v) {
+    probeAlpha(v, function (r) {
+      cvKey = !!r && r.clear <= 0.30;
+      if (r && r.bg) bgRgb = r.bg;
+      KEY_LO = 26; KEY_HI = 96;
+      setRender();
+    });
+  }
+
+  document.getElementById('hero').style.backgroundImage = 'url(' + ASSET + 'ui/hero.jpg)';
+
+  function find(id) {
+    for (var i = 0; i < CAT.items.length; i++) if (CAT.items[i].id === id) return CAT.items[i];
+    return null;
+  }
+  function urlOf(item) {
+    return item.src ? item.src : (MEDIA + item.category + '/' + item.id + '.webm');
+  }
+
+  /* ---------- 导入动画：按实际 alpha 包围盒裁剪 ----------
+     内置的 95 个动作共用一份实测出来的裁剪参数（--vL/--vT/--vW/--vH）。
+     用户导入的动画角色位置各不相同，只能播起来之后现场量一遍。 */
+  function clearCrop(v) {
+    v.style.left = ''; v.style.top = ''; v.style.width = ''; v.style.height = '';
+    v.removeAttribute('data-crop');
+  }
+
+  function applyCrop(v, item) {
+    var c = item && item.crop;
+    if (!c || !v.videoWidth) { clearCrop(v); return; }
+    var vw = v.videoWidth, vh = v.videoHeight;
+    var bw = pet.clientWidth || cfg.w || 96;
+    var bh = pet.clientHeight || Math.round((cfg.w || 96) * 1.1783);
+    // 悬浮窗只有 bw×bh 这么大，超出去的部分会被窗口直接切掉（FLAG_LAYOUT_NO_LIMITS
+    // 也只是允许越界摆放，屏幕外的照旧看不见）。所以导入的素材按"完整装下"缩放，
+    // 而不是像内置素材那样把裁剪区高度撑满再往两边溢 —— 内置素材的角色本身居中，
+    // 溢出的是空白区，用户素材不知道画在哪，宁可小一点也别切掉。
+    var k = Math.min(bh / Math.max(1, c.h * vh), bw / Math.max(1, c.w * vw));
+    var dw = vw * k, dh = vh * k;
+    v.style.width = dw.toFixed(1) + 'px';
+    v.style.height = dh.toFixed(1) + 'px';
+    v.style.left = ((bw - c.w * vw * k) / 2 - c.l * vw * k).toFixed(1) + 'px';
+    v.style.top = ((bh - c.h * vh * k) / 2 - c.t * vh * k).toFixed(1) + 'px';
+    v.setAttribute('data-crop', [c.l.toFixed(3), c.t.toFixed(3),
+      c.w.toFixed(3), c.h.toFixed(3)].join(','));
+  }
+
+  /** 采样若干帧，求 alpha 的并集包围盒；顺便判断这个素材到底有没有透明通道 */
+  function fitClip(v, item) {
+    if (item._fit) return;
+    item._fit = true;
+    var W = 96, H = 54;
+    var c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    var g = c.getContext('2d', { willReadFrequently: true });
+    var box = null, n = 0, opaqueAll = true;
+
+    function tick() {
+      if (!item._fit) return;
+      if (v.videoWidth && v.readyState >= 2) {
+        try {
+          g.clearRect(0, 0, W, H);
+          g.drawImage(v, 0, 0, W, H);
+          var d = g.getImageData(0, 0, W, H).data;
+          var x0 = W, y0 = H, x1 = -1, y1 = -1, tot = W * H, solid = 0;
+          for (var y = 0; y < H; y++) {
+            for (var x = 0; x < W; x++) {
+              var a = d[(y * W + x) * 4 + 3];
+              if (a > 200) solid++;
+              if (a >= 24) {
+                if (x < x0) x0 = x;
+                if (x > x1) x1 = x;
+                if (y < y0) y0 = y;
+                if (y > y1) y1 = y;
+              }
+            }
+          }
+          if (solid < tot * 0.985) opaqueAll = false;
+          if (x1 >= 0) {
+            var b = { l: x0 / W, t: y0 / H, r: (x1 + 1) / W, b: (y1 + 1) / H };
+            box = box ? {
+              l: Math.min(box.l, b.l), t: Math.min(box.t, b.t),
+              r: Math.max(box.r, b.r), b: Math.max(box.b, b.b)
+            } : b;
+          }
+        } catch (e) {}
+      }
+      if (++n < 12) { setTimeout(tick, 160); return; }
+
+      if (box && box.r > box.l && box.b > box.t) {
+        var pad = 0.05;          // 留点余量：采样帧之外的摆幅不至于被切掉
+        var l = Math.max(0, box.l - pad), t = Math.max(0, box.t - pad);
+        item.crop = {
+          l: l, t: t,
+          w: Math.min(1, box.r + pad) - l,
+          h: Math.min(1, box.b + pad) - t
+        };
+      } else {
+        item.crop = { l: 0, t: 0, w: 1, h: 1 };
+      }
+      item.opaque = opaqueAll;
+      applyCrop(v, item);
+      if (opaqueAll) toast('这个素材没有透明通道，会带一块底');
+    }
+    tick();
+  }
+
+  function clearToast() {
+    clearTimeout(toast._t);
+    toastEl.classList.remove('on');
+  }
+
+  /** 悬浮窗只有一只鲸鱼那么大，桌面状态下不显示任何文字；只在动作库打开时给提示 */
+  function toast(msg) {
+    if (!menuOpen) return;
+    toastEl.textContent = msg;
+    toastEl.classList.add('on');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () { toastEl.classList.remove('on'); }, 1700);
+  }
+
+  function chooseVar(once) {
+    if (cfg.variant && cfg.variant !== 'auto') return cfg.variant;
+    if (!once) return 'normal';                                  // 常驻动作保持稳定，别自己突然翻面
+    return AUTO_POOL[Math.floor(Math.random() * AUTO_POOL.length)];
+  }
+
+  // ---------- 播放 ----------
+  function play(id, once, hold, forceVar, onShown, dir) {
+    var item = find(id);
+    if (!item) return;
+    var seq = ++playSeq;
+    var vname = VARS[forceVar] ? forceVar : chooseVar(!!once);
+    var vdef = VARS[vname];
+    var next = 1 - cur, v = vids[next], prev = vids[cur];
+    var src = urlOf(item);
+
+    playing = { id: id, once: !!once, name: item.nameZh, vname: vname, seq: seq };
+
+    var sameSrc = v.getAttribute('data-src') === src;
+    if (!sameSrc) {
+      v.setAttribute('data-src', src);
+      v.src = src;
+    }
+    v.loop = !once;
+    v.playbackRate = vdef.rate;
+
+    var started = false;
+    function promote() {
+      if (started || seq !== playSeq) return;
+      started = true;
+      try { v.playbackRate = vdef.rate; } catch (e) {}
+      // dir: 1 向右、-1 向左、0/undefined 用变体自己的朝向
+      var wantFlip = dir ? dir > 0 : !!vdef.flip;
+      cvFlip = wantFlip;
+      pet.classList.toggle('flip', wantFlip);
+      // 导入的素材先按整帧摆好（量准了再收紧），否则会误用内置素材那套裁剪参数
+      if (item.category === 'my' && !item.crop) item.crop = { l: 0, t: 0, w: 1, h: 1 };
+      applyCrop(v, item);          // 导入动作按自己的包围盒摆位，内置动作走 CSS 变量
+      v.classList.add('on');
+      prev.classList.remove('on');
+      cur = next;
+      var p = v.play();
+      if (p && p.catch) p.catch(function () {});
+      if (item.category === 'my') fitClip(v, item);
+      // 淡出后立刻停掉旧视频，两个 10 秒循环同时解码非常费电
+      setTimeout(function () { if (prev !== v) { try { prev.pause(); } catch (e) {} } }, 200);
+      clearTimeout(backTimer); clearTimeout(stallTimer);
+      if (once) {
+        // 兜底时长必须按视频真实时长算。以前固定 11 秒：原速动作刚好卡在 10.04 秒，
+        // 看不出问题；但慢放变体（rate 0.62）会把动作拉到 16 秒，11 秒一到就被砍断，
+        // 舞狮头这种长动作尤其明显。现在按 duration/rate 算，正常由 ended 先触发。
+        var realMs = 0;
+        try { if (isFinite(v.duration) && v.duration > 0) realMs = v.duration * 1000; } catch (e) {}
+        var ms = (hold && hold > 0) ? hold : (realMs || 11000);
+        ms = ms / (vdef.rate || 1) + 400;
+        backTimer = setTimeout(function () { if (seq === playSeq) finishOnce(); }, ms);
+      }
+      scheduleChatter();
+      initRender(v);
+      if (onShown) { try { onShown(); } catch (e) {} }
+    }
+
+    v.oncanplay = function () { v.oncanplay = null; promote(); };
+    v.onerror = function () {
+      if (seq !== playSeq) return;
+      // 导入的动作走 pet.local 通道。万一这台 ROM 不认 https 拦截，退回 file:// 绝对路径再试一次。
+      if (item.fileSrc && v.getAttribute('data-src') !== item.fileSrc) {
+        v.setAttribute('data-src', item.fileSrc);
+        v.src = item.fileSrc;
+        try { v.load(); } catch (e) {}
+        return;
+      }
+      if (!started) { started = true; finishOnce(); }
+    };
+    v.onended = function () { if (seq === playSeq && once) finishOnce(); };
+
+    if (sameSrc && v.readyState >= 2) { try { v.currentTime = 0; } catch (e) {} promote(); }
+    else if (!sameSrc) { try { v.load(); } catch (e) {} }
+
+    clearTimeout(stallTimer);
+    stallTimer = setTimeout(function () {
+      if (!started && seq === playSeq) finishOnce();
+    }, 9000);
+  }
+
+  function finishOnce() {
+    if (chain.length) {
+      var id = chain.shift();
+      play(id, true, 4200);          // 串烧里每个动作只取 4.2 秒，节奏更紧凑
+      return;
+    }
+    backToIdle();
+  }
+
+  function backToIdle() {
+    clearTimeout(backTimer); clearTimeout(stallTimer);
+    chain = [];
+    play(cfg.idle || 'breathing', false);
+  }
+
+  // 待机时偶尔自己玩一个
+  function scheduleChatter() {
+    clearTimeout(idleTimer);
+    if (!playing || playing.once) return;
+    idleTimer = setTimeout(function () {
+      if (menuOpen) return scheduleChatter();
+      var pool = byCat.daily.concat(byCat.fun, byCat.seasonal, byCat.special);
+      play(pool[Math.floor(Math.random() * pool.length)].id, true);
+    }, 15000 + Math.random() * 20000);
+  }
+
+  // ---------- 手势 ----------
+  var downAt = 0;
+  hit.addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    downAt = Date.now();
+    if (AND && AND.onDown) AND.onDown();
+  });
+  hit.addEventListener('pointerup', function (e) {
+    e.preventDefault();
+    var dur = Date.now() - downAt;
+    downAt = 0;
+    if (AND && AND.onUp) AND.onUp(dur);
+    if (menuOpen) return;
+    if (dur > 500) return;
+    if (cfg.tapMode === 'none') return;
+    var pool = cfg.tapMode === 'reactions' ? byCat.clicks : CAT.items;
+    if (!pool.length) return;
+    play(pool[Math.floor(Math.random() * pool.length)].id, true);
+  });
+  hit.addEventListener('pointercancel', function () { downAt = 0; if (AND && AND.onUp) AND.onUp(0); });
+
+  // ---------- 原生接口 ----------
+  window.petPlay = function (id, once, hold, vname) { play(id, once !== false, hold, vname); };
+  /**
+   * 原生漫游：dur 是这次位移要走的时长（原生按距离算好后传进来），
+   * dir 是方向。动作上屏的那一刻才回调 walkStart，让"迈腿"和"平移"同一秒开始，
+   * 并且动作时长与位移时长严格相等，不会出现走完了还在原地踏步。
+   */
+  window.petWalk = function (dur, dir) {
+    var d = dur > 0 ? dur : 1500;
+    // 固定用 normal 变体：慢放的 playbackRate 会把这个动作实际拉长到 1/0.62，
+    // 位移却还是 d 毫秒，末尾会原地踏步。朝向由 dir 单独控制。
+    play(Math.random() < 0.5 ? 'floating_steps' : 'crab_walk', true, d, 'normal',
+      function () { if (AND && AND.walkStart) AND.walkStart(); }, dir || 0);
+  };
+  window.petIdle = function () { backToIdle(); };
+  /**
+   * 原生每次想让她走一段之前会先问这一句。
+   * 正在播"只播一次"的动作（动作库挑的、舞狮头这种十秒长镜头）就直接不回应，
+   * 原生那一轮漫游自然作废，等下次再问 —— 长镜头不会被走路动作顶掉。
+   */
+  window.petRoamReady = function () {
+    if (menuOpen) return;
+    if (playing && playing.once) return;
+    if (AND && AND.roamNow) AND.roamNow();
+  };
+  // 只读状态，供原生与自测查询"当前在播哪个动作"
+  window.petPlaying = function () {
+    return playing ? { id: playing.id, once: !!playing.once, name: playing.name } : null;
+  };
+  window.petSetVar = function (name, value) { document.documentElement.style.setProperty(name, value); };
+
+  window.petApply = function (json) {
+    try {
+      var o = JSON.parse(json);
+      Object.keys(o).forEach(function (k) { if (cfg[k] !== undefined) cfg[k] = o[k]; });
+      syncUI();
+      scheduleRoam();
+      if (playing && !playing.once && playing.id !== cfg.idle) backToIdle();
+    } catch (e) {}
+  };
+  window.petPrepareMenu = function (x, y) {
+    document.documentElement.style.setProperty('--anchor-x', x + 'px');
+    document.documentElement.style.setProperty('--anchor-y', y + 'px');
+    document.body.classList.add('menu');
+  };
+  window.petOpenMenu = function () {
+    requestAnimationFrame(function () { requestAnimationFrame(function () { openSheet('lib'); }); });
+  };
+  window.petCloseMenu = function () { closeSheet(); };
+  /** 原生把窗口缩回角色大小之后回调，这时再让角色出现才不会跳 */
+  window.petMenuClosed = function () { document.body.classList.remove('menu', 'menu-closing'); };
+  window.petResume = function () {
+    var v = vids[cur];
+    if (cvOn) {
+      fitCanvas();
+      if (!cvRaf) cvRaf = requestAnimationFrame(cvTick);
+    }
+    // 藏起来的这段时间里视频可能已经播完、或者解码器被系统回收了。
+    // 这时只 play() 一下画面会停住不动 —— 直接重开一个动作，保证回桌面时是活的。
+    if (!v || !playing || v.ended || v.readyState < 2) {
+      backToIdle();
+    } else {
+      var p = v.play();
+      if (p && p.catch) p.catch(function () {});
+    }
+    scheduleChatter(); scheduleRoam();
+  };
+  window.petPause = function () {
+    clearTimeout(idleTimer); clearTimeout(roamTimer);
+    var v = vids[cur];
+    if (v) { try { v.pause(); } catch (e) {} }
+    if (cvRaf) { cancelAnimationFrame(cvRaf); cvRaf = 0; }   // 藏起来就别再逐帧画了
+  };
+
+  // ---------- 弹层 ----------
+  var sheet = document.getElementById('sheet');
+  var mask = document.getElementById('mask');
+  var menuOpen = false;
+  var menuGuard = null;
+
+  function syncLift() {
+    if (!menuOpen) return;
+    // 角色保持长按前的位置，面板独立运动。
+  }
+
+  // ---------- 滚动提示条 ----------
+  // 动作有 95 个，面板里一定滚得动，但光看一屏容易以为就这些。
+  // 拖动或滑动时在右侧亮一根细条，松手 1.4 秒后淡出；面板刚打开时也闪一下做引导。
+  var sbar = document.getElementById('sbar');
+  var sbarThumb = document.getElementById('sbarThumb');
+  var sbarTimer = null;
+  var libBody = document.getElementById('paneLib');
+
+  function sbarSync() {
+    if (!menuOpen || !sbar || !libBody) return false;
+    var visible = libBody.scrollHeight - libBody.clientHeight > 8;
+    if (!visible) { sbar.classList.remove('on'); sbar.style.height = '0px'; return false; }
+
+    var br = libBody.getBoundingClientRect();
+    var sr = sheet.getBoundingClientRect();
+    var top = br.top - sr.top + 6;
+    var area = br.height - 12;
+    if (area <= 20) { sbar.classList.remove('on'); return false; }
+
+    var ratio = libBody.clientHeight / libBody.scrollHeight;
+    var thumbH = Math.max(26, Math.round(area * ratio));
+    var maxShift = area - thumbH;
+    var maxScroll = Math.max(1, libBody.scrollHeight - libBody.clientHeight);
+    var p = Math.min(1, Math.max(0, libBody.scrollTop / maxScroll));
+
+    sbar.style.top = top + 'px';
+    sbar.style.height = area + 'px';
+    sbarThumb.style.height = thumbH + 'px';
+    sbarThumb.style.transform = 'translateY(' + Math.round(p * maxShift) + 'px)';
+    return true;
+  }
+
+  /** 亮起来，1.4 秒没人动就淡出 */
+  function sbarWake(stay) {
+    if (!sbarSync()) return;
+    sbar.classList.add('on');
+    clearTimeout(sbarTimer);
+    sbarTimer = setTimeout(function () { sbar.classList.remove('on'); }, stay || 1400);
+  }
+
+  libBody.addEventListener('scroll', function () { sbarWake(); }, { passive: true });
+  libBody.addEventListener('touchstart', function () { sbarWake(1800); }, { passive: true });
+
+  function openSheet(tab) {
+    if (menuOpen) return;
+    menuOpen = true;
+    document.body.classList.add('menu');
+    clearTimeout(idleTimer);
+    sheet.classList.add('on');
+    mask.classList.add('on');
+    switchTab(tab || 'lib');
+    syncLift();
+    setTimeout(syncLift, 70);
+    setTimeout(function () { sbarWake(1900); }, 120);   // 打开时闪一下，提示这里能滑
+    clearTimeout(menuGuard);
+    menuGuard = setTimeout(function () { if (menuOpen) closeSheet(); }, 120000);
+  }
+
+  /** keep=true 表示用户刚挑了一个动作，别再插一个待机动作把画面抢回去 */
+  function closeSheet(keep) {
+    if (!menuOpen) return;
+    menuOpen = false;
+    clearTimeout(menuGuard);
+    clearToast();                       // 小窗只有 96dp 宽，任何浮层都会压在鲸鱼身上
+    sheet.classList.remove('on');
+    mask.classList.remove('on');
+    // 原生恢复小窗口之后才解除角色坐标固定；浏览器预览自行复位。
+    if (!AND) setTimeout(window.petMenuClosed, 340);
+    document.documentElement.style.setProperty('--lift', '0px');
+    if (AND && AND.closeMenu) AND.closeMenu();
+    // 同一帧随视口尺寸切换坐标，避免原生缩窗与 JS 回调之间闪到窗外。
+    var coordinateStyle = document.getElementById('menuCoordinates');
+    if (!coordinateStyle) {
+      coordinateStyle = document.createElement('style');
+      coordinateStyle.id = 'menuCoordinates';
+      document.head.appendChild(coordinateStyle);
+    }
+    coordinateStyle.textContent = '@media(max-width:' + (cfg.w + 1) + 'px){body.menu-closing #pet{left:0;top:0}}';
+    document.body.classList.add('menu-closing');
+    scheduleChatter(); scheduleRoam();
+  }
+  mask.addEventListener('click', function () { closeSheet(); });
+
+  function switchTab(tab) {
+    document.querySelectorAll('.tab').forEach(function (t) { t.classList.toggle('on', t.dataset.tab === tab); });
+    document.getElementById('paneLib').classList.toggle('hidden', tab !== 'lib');
+    document.getElementById('paneSet').classList.toggle('hidden', tab !== 'set');
+    document.getElementById('sheetTitle').textContent = tab === 'lib' ? '大肥鱼 · 动作库' : '大肥鱼 · 设置';
+    document.getElementById('sheetSub').textContent = tab === 'lib'
+      ? (CAT.items.length + ' 个动作 · 4 种变体 · ' + CAT.cats.length + ' 类')
+      : '大小、透明度、常驻动作';
+    requestAnimationFrame(syncLift);
+    setTimeout(sbarSync, 30);
+  }
+  document.querySelectorAll('.tab').forEach(function (t) {
+    t.addEventListener('click', function () { switchTab(t.dataset.tab); });
+  });
+
+  var catsEl = document.getElementById('cats');
+  var gridEl = document.getElementById('grid');
+  var ALL = '__all__';      // 伪分类：一次铺开 95 个动作
+  var activeCat = ALL;      // 默认「全部」，一进来就是 95 个动作铺满，配合右侧滚动条
+
+  var HUES = { idle:205, turn:190, moves:165, clicks:330, drag:15, daily:45, work:215,
+               games:275, music:295, food:25, festivals:350, seasonal:145, magic:260,
+               fun:55, special:200, memes:310 };
+
+  function renderCats() {
+    catsEl.innerHTML = '';
+    var first = document.createElement('div');
+    first.className = 'cat' + (activeCat === ALL ? ' on' : '');
+    first.innerHTML = '<span>全部</span><i>' + CAT.items.length + '</i>';
+    first.addEventListener('click', function () {
+      activeCat = ALL; renderCats(); renderGrid(); syncLift();
+      libBody.scrollTop = 0;
+      setTimeout(function () { sbarWake(1900); }, 60);
+    });
+    catsEl.appendChild(first);
+
+    CAT.cats.forEach(function (c) {
+      var d = document.createElement('div');
+      d.className = 'cat' + (c === activeCat ? ' on' : '');
+      d.innerHTML = '<span>' + (CAT_NAME[c] || c) + '</span><i>' + (byCat[c] || []).length + '</i>';
+      d.addEventListener('click', function () {
+        activeCat = c; renderCats(); renderGrid(); syncLift();
+      });
+      catsEl.appendChild(d);
+    });
+  }
+
+  function renderGrid() {
+    var list = activeCat === ALL ? CAT.items : (byCat[activeCat] || []);
+    var frag = document.createDocumentFragment();
+    list.forEach(function (it) {
+      var d = document.createElement('div');
+      d.className = 'item';
+      d.style.setProperty('--c', HUES[it.category] || 215);
+      d.innerHTML = '<span class="nm">' + it.nameZh + '</span><span class="tg">'
+        + (CAT_NAME[it.category] || '') + '</span>'
+        + (it.category === 'my' ? '<span class="del" title="删除">×</span>' : '');
+      d.addEventListener('click', function (e) {
+        if (e.target.classList.contains('del')) {
+          e.stopPropagation();
+          if (AND && AND.removeClip) AND.removeClip(it.id);
+          return;
+        }
+        pickAction(it);
+      });
+      frag.appendChild(d);
+    });
+    gridEl.innerHTML = '';
+    gridEl.appendChild(frag);
+  }
+
+  /** 挑一个动作：先把画面切过去，再收弹层 —— 顺序反了会闪一下待机动作 */
+  function pickAction(it) {
+    var vname = cfg.variant === 'auto' ? chooseVar(true) : cfg.variant;
+    chain = [];
+    play(it.id, true, 0, vname);
+    closeSheet(true);          // 面板一收就回到干净的桌宠，不留任何文字浮层
+  }
+
+  function playChain() {
+    var all = [];
+    CAT.items.forEach(function (it) { if (it.category !== 'idle') all.push(it); });
+    var ids = [];
+    for (var i = 0; i < 4; i++) ids.push(all[Math.floor(Math.random() * all.length)].id);
+    var vname = cfg.variant === 'auto' ? 'normal' : cfg.variant;
+    chain = ids.slice(1);
+    play(ids[0], true, 4200, vname);
+    closeSheet(true);
+  }
+
+  // 变体 chips
+  var varsEl = document.getElementById('vars');
+  varsEl.addEventListener('click', function (e) {
+    var chip = e.target.closest('.vchip');
+    if (!chip) return;
+    var v = chip.dataset.v;
+    if (v === 'chain') { playChain(); return; }
+    cfg.variant = v;
+    persist();
+    syncUI();
+    toast('变体：' + (v === 'auto' ? '随机' : VARS[v].label || '原样'));
+  });
+
+  // ---------- 设置 ----------
+  var rSize = document.getElementById('rSize');
+  var rOp = document.getElementById('rOp');
+  var swRoam = document.getElementById('swRoam');
+  var swTap = document.getElementById('swTap');
+
+  // ---------- 导入动画 ----------
+  var btnImport = document.getElementById('btnImport');
+  if (btnImport) {
+    btnImport.addEventListener('click', function () {
+      if (AND && AND.importClip) AND.importClip();
+      else toast('这台设备不支持导入');
+    });
+  }
+
+  /** 原生把「我的动作」列表推过来。src 走 pet.local 通道，fileSrc 是 file:// 兜底 */
+  function installClips(list) {
+    CAT.items = CAT.items.filter(function (it) { return it.category !== 'my'; });
+    byCat.my = [];
+    (list || []).forEach(function (c) {
+      if (!c || !c.id) return;
+      var it = {
+        id: c.id, nameZh: c.name || c.id, category: 'my',
+        src: c.src || '', fileSrc: c.file || '', crop: null
+      };
+      CAT.items.push(it);
+      byCat.my.push(it);
+    });
+    var idx = CAT.cats.indexOf('my');
+    if (byCat.my.length && idx < 0) CAT.cats.unshift('my');
+    if (!byCat.my.length && idx >= 0) CAT.cats.splice(idx, 1);
+    if (activeCat === 'my' && !byCat.my.length) activeCat = ALL;
+    renderCats(); renderGrid(); syncLift();
+    var cnt = document.getElementById('vMy');
+    if (cnt) cnt.textContent = byCat.my.length ? byCat.my.length + ' 个' : '空';
+  }
+  window.petClips = function (json) {
+    try { installClips(JSON.parse(json)); } catch (e) {}
+  };
+
+  function syncUI() {
+    document.documentElement.style.setProperty('--pw', cfg.w + 'px');
+    document.documentElement.style.setProperty('--op', (cfg.op / 100).toString());
+    rSize.value = cfg.w; rOp.value = cfg.op;
+    document.getElementById('vSize').textContent = cfg.w + 'dp';
+    document.getElementById('vOp').textContent = cfg.op + '%';
+    var mycnt = document.getElementById('vMy');
+    if (mycnt) mycnt.textContent = (byCat.my && byCat.my.length) ? byCat.my.length + ' 个' : '空';
+    swRoam.classList.toggle('on', cfg.roam);
+    swTap.textContent = {all:'全部动作随机', reactions:'互动反应', none:'不响应'}[cfg.tapMode] || '全部动作随机';
+    varsEl.querySelectorAll('.vchip').forEach(function (c) {
+      c.classList.toggle('on', c.dataset.v === cfg.variant);
+    });
+    document.getElementById('sheetSub').textContent =
+      CAT.items.length + ' 个动作 · 4 种变体 · ' + CAT.cats.length + ' 类';
+  }
+
+  rSize.addEventListener('input', function () {
+    cfg.w = Number(rSize.value); syncUI(); persist();
+    if (AND && AND.setSize) AND.setSize(cfg.w);
+    if (cvOn) fitCanvas();
+    syncLift();
+  });
+  rOp.addEventListener('input', function () {
+    cfg.op = Number(rOp.value); syncUI(); persist();
+    if (AND && AND.setAlpha) AND.setAlpha(cfg.op / 100);
+  });
+  swRoam.addEventListener('click', function () { cfg.roam = !cfg.roam; syncUI(); persist(); });
+  swTap.addEventListener('click', function () { cfg.tapMode = ['all','reactions','none'][(['all','reactions','none'].indexOf(cfg.tapMode) + 1) % 3]; syncUI(); persist(); });
+
+  document.getElementById('btnIdle').addEventListener('click', function () {
+    var pool = byCat.idle.concat(byCat.daily, byCat.special);
+    var it = pool[Math.floor(Math.random() * pool.length)];
+    cfg.idle = it.id; persist(); closeSheet(); toast('常驻动作：' + it.nameZh);
+  });
+  document.getElementById('btnCfg').addEventListener('click', function () {
+    closeSheet();
+    if (AND && AND.requestConfig) AND.requestConfig();
+  });
+  document.getElementById('btnQuit').addEventListener('click', function () {
+    if (AND && AND.quit) AND.quit();
+  });
+
+  // 原生漫游
+  function scheduleRoam() {
+    clearTimeout(roamTimer);
+    if (!cfg.roam) return;
+    // 正在播"只播一次"的动作（动作库里挑的、舞狮头这类长镜头）时不许漫游抢镜，
+    // 否则走到一半被切成走路动作，原动作就播不完整了。先短间隔探一探，等它播完。
+    var busy = !!(playing && playing.once);
+    var wait = busy ? 3000 : (9000 + Math.random() * 12000);
+    roamTimer = setTimeout(function () {
+      if (!menuOpen && !(playing && playing.once) && AND && AND.roam) AND.roam();
+      scheduleRoam();
+    }, wait);
+  }
+
+  if (BOOT_CLIPS.length) installClips(BOOT_CLIPS);
+  renderCats(); renderGrid(); syncUI();
+  play(cfg.idle || 'breathing', false);
+  scheduleRoam();
+
+  // 兜底 1：3.5 秒还没读出视频，让原生换拦截通道重载
+  var triedFallback = false;
+  setTimeout(function () {
+    var v = vids[cur];
+    if (v && v.readyState < 2 && !triedFallback && AND && AND.assetFail) {
+      triedFallback = true;
+      AND.assetFail();
+    }
+  }, 3500);
+
+  // 兜底 2：仍然不行就明说，别装死
+  setTimeout(function () {
+    var v = vids[cur];
+    if (v && v.readyState < 2) {
+      var d = document.createElement('div');
+      d.setAttribute('style', 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;'
+        + 'text-align:center;padding:16px;font-size:12px;line-height:1.7;color:#ffb4b4;'
+        + 'background:rgba(12,18,30,.94);border-radius:10px;z-index:99');
+      d.textContent = '动作素材加载失败：这台手机的 WebView 可能不支持内置视频。';
+      document.body.appendChild(d);
+    }
+  }, 7500);
+
+  setTimeout(function () { if (AND && AND.ready) AND.ready(); }, 60);
+})();
+</script>
+</body>
+</html>

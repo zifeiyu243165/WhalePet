@@ -1,0 +1,14 @@
+* text=auto
+
+# 脚本保持 LF，避免在 Git Bash / macOS 下出现 \r 报错
+*.sh  text eol=lf
+*.mjs text eol=lf
+*.py  text eol=lf
+
+# 二进制，禁止换行转换与文本 diff
+*.webm binary
+*.mp4  binary
+*.png  binary
+*.jpg  binary
+*.jks  binary
+*.apk  binary
