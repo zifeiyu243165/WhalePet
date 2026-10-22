@@ -745,8 +745,9 @@
   function scheduleChatter() {
     clearTimeout(idleTimer);
     if (!playing || playing.once) return;
+    if (dragHold) return;                     // 拎在手上时别自己换动作
     idleTimer = setTimeout(function () {
-      if (menuOpen) return scheduleChatter();
+      if (menuOpen || dragHold) return scheduleChatter();
       var pool = byCat.daily.concat(byCat.fun, byCat.seasonal, byCat.special);
       play(pool[Math.floor(Math.random() * pool.length)].id, true);
     }, 15000 + Math.random() * 20000);
@@ -788,6 +789,32 @@
       function () { if (AND && AND.walkStart) AND.walkStart(); }, dir || 0);
   };
   window.petIdle = function () { backToIdle(); };
+
+  // ---------- 拖动 ----------
+  // 手感全在这三个接口上：抓起来立刻换动作、倍速跟着手速走、放下（或飞完）才回待机。
+  // 以前只有"开始拖时播一次悬空动作、松手立刻回待机"，中间那段全靠同一个循环硬撑，
+  // 拖久了像尊雕像；松手又是立定停住，所以整体感觉死板。
+  var dragHold = false;
+  window.petDragStart = function () {
+    if (menuOpen) return;
+    dragHold = true;
+    clearTimeout(idleTimer); clearTimeout(roamTimer); clearTimeout(backTimer);
+    // once=false → 循环播；变体固定 normal，倍速另外由 petDragRate 调
+    play('dragged_in_midair', false, 0, 'normal');
+  };
+  /** 倍速跟手速：慢慢挪 0.8x，一把甩出去 1.7x */
+  window.petDragRate = function (r) {
+    if (!dragHold || !playing || playing.id !== 'dragged_in_midair') return;
+    var v = vids[cur];
+    if (!v) return;
+    try { v.playbackRate = Math.max(0.6, Math.min(1.8, r)); } catch (e) {}
+  };
+  /** 真正结束：放下、或者被甩出去滑完了 */
+  window.petDragEnd = function () {
+    if (!dragHold) return;
+    dragHold = false;
+    backToIdle();
+  };
   /**
    * 原生每次想让她走一段之前会先问这一句。
    * 正在播"只播一次"的动作（动作库挑的、舞狮头这种十秒长镜头）就直接不回应，
@@ -795,6 +822,7 @@
    */
   window.petRoamReady = function () {
     if (menuOpen) return;
+    if (dragHold) return;                 // 正被拎在手上，别自己走开
     if (playing && playing.once) return;
     if (AND && AND.roamNow) AND.roamNow();
   };

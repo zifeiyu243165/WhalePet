@@ -91,7 +91,6 @@ public class PetService extends Service implements PetContainer.Host {
     private boolean expanded;          // 菜单展开中（窗口临时全屏）
     private boolean attached;
     private boolean menuClosing;
-    private boolean dragAnimating;
     private int savedX, savedY;
 
     private BroadcastReceiver screenRx;
@@ -368,6 +367,8 @@ public class PetService extends Service implements PetContainer.Host {
     private void hidePet() {
         expanded = false;
         menuClosing = false;      // 收窗中途被关掉的话，别把状态卡在"正在收"上
+        dragging = false;
+        stopGlide();              // 滑行中的动画器盯着 lp/root，先停掉再拆窗口
         stopWatch();
         if (web != null) {
             try { web.evaluateJavascript("petPause()", null); } catch (Throwable ignored) {}
@@ -422,29 +423,62 @@ public class PetService extends Service implements PetContainer.Host {
 
     // ---------------------------------------------------------------- 手势 Host
 
+    private boolean dragging;          // 手指还按着
+    private ValueAnimator glide;       // 松手后的惯性滑行
+    private long rateT;                // 倍速上报的时间/位置基线
+    private int rateX, rateY;
+    private float rateSent = 1f;
+
+    @Override
+    public void touchDown() {
+        if (!attached || glide == null) return;
+        // 抓住正在滑行的她：立刻停住并按落位处理，别让窗口在手底下继续跑
+        stopGlide();
+        savedX = lp.x;
+        savedY = lp.y;
+        Prefs.sp(this).edit().putInt(Prefs.K_X, savedX).putInt(Prefs.K_Y, savedY).apply();
+        js("petDragEnd()");
+    }
+
+    @Override
+    public void dragStart() {
+        if (!attached || expanded) return;
+        stopGlide();
+        dragging = true;
+        rateT = 0;
+        rateSent = 1f;
+        rateX = lp.x;
+        rateY = lp.y;
+        js("petDragStart()");          // 页面立刻切到"被拎起来"的悬空动作
+    }
+
     @Override
     public void dragBy(float dx, float dy) {
         if (!attached || expanded) return;
         DisplayMetrics dm = getResources().getDisplayMetrics();
         int nx = clamp(Math.round(savedX + dx), -charW / 3, dm.widthPixels - charW * 2 / 3);
         int ny = clamp(Math.round(savedY + dy), 0, dm.heightPixels - charH * 2 / 3);
-        lp.x = nx;
-        lp.y = ny;
-        pushLayout();
-        if (!dragAnimating) {
-            dragAnimating = true;
-            js("petPlay('dragged_in_midair',false)");
-        }
+        moveTo(nx, ny);
+        reportRate(nx, ny);
     }
 
+    /**
+     * 松手。慢慢放下就原地回到常驻动作；甩得够快就让惯性滑一段 ——
+     * 这一步是"贴纸手感"和"活物手感"的分水岭，少了它前面再怎么调都死板。
+     */
     @Override
-    public void dragEnd() {
-        if (!attached) return;
-        dragAnimating = false;
+    public void dragEnd(float vx, float vy) {
+        if (!attached || lp == null) return;
+        dragging = false;
         savedX = lp.x;
         savedY = lp.y;
-        Prefs.sp(this).edit().putInt(Prefs.K_X, savedX).putInt(Prefs.K_Y, savedY).apply();
-        js("petIdle()");
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        float speed = (float) Math.hypot(vx, vy);
+        if (speed < 260f * dm.density) {          // 约 260dp/s 以下：直接放下
+            settleAfterDrag();
+            return;
+        }
+        fling(vx, vy);
     }
 
     @Override
@@ -458,10 +492,102 @@ public class PetService extends Service implements PetContainer.Host {
         return expanded;
     }
 
+    private void moveTo(int x, int y) {
+        if (lp == null || root == null) return;
+        if (lp.x == x && lp.y == y) return;
+        lp.x = x;
+        lp.y = y;
+        pushLayout();
+    }
+
+    /**
+     * 把移动速度换算成播放倍速发给页面：慢慢挪是慵懒的悬空，一把甩出去她就跟着急起来。
+     * 用窗口位移算而不是手指位移，甩出去之后的滑行也能顺着减速。
+     */
+    private void reportRate(int x, int y) {
+        long now = android.os.SystemClock.uptimeMillis();
+        if (rateT == 0) { rateT = now; rateX = x; rateY = y; return; }
+        float dt = (now - rateT) / 1000f;
+        if (dt < 0.05f) return;                   // 太密了算不准，攒够 50ms 再看
+        float dp = (float) Math.hypot(x - rateX, y - rateY) / getResources().getDisplayMetrics().density;
+        rateT = now;
+        rateX = x;
+        rateY = y;
+        float rate = clampf(0.8f + dp / dt / 900f, 0.8f, 1.7f);
+        if (Math.abs(rate - rateSent) < 0.08f) return;
+        rateSent = rate;
+        js("petDragRate(" + rate + ")");
+    }
+
+    /**
+     * 惯性滑行。
+     *
+     * 速度按指数阻尼衰减 v(t)=v0·e^-kt，总距离就是 v0/k；这里用 DecelerateInterpolator(3)
+     * 逼近同一个形状，并把时长取 3/k，于是**起步速度正好等于松手速度**，看不出接缝。
+     * 5.5/s 的阻尼大概滑 0.5 秒，甩一下飞 200~500px，手感最接近真把东西扔出去。
+     */
+    private void fling(float vx, float vy) {
+        final float K = 5.5f;                     // 阻尼系数 1/s
+        DisplayMetrics dm = getResources().getDisplayMetrics();
+        final int loX = -charW / 3, hiX = dm.widthPixels - charW * 2 / 3;
+        final int loY = 0, hiY = dm.heightPixels - charH * 2 / 3;
+        final int x0 = lp.x, y0 = lp.y;
+        final float runX = vx / K, runY = vy / K;
+        final int dur = Math.round(clampf(3000f / K, 320f, 620f));   // ≈ 545ms
+        rateT = 0;
+        rateX = x0;
+        rateY = y0;
+
+        ValueAnimator a = ValueAnimator.ofFloat(0f, 1f);
+        a.setDuration(dur);
+        a.setInterpolator(new android.view.animation.DecelerateInterpolator(3f));
+        a.addUpdateListener(anim -> {
+            if (!attached || expanded) return;
+            float f = (float) anim.getAnimatedValue();
+            int nx = clamp(Math.round(x0 + runX * f), loX, hiX);
+            int ny = clamp(Math.round(y0 + runY * f), loY, hiY);
+            moveTo(nx, ny);
+            reportRate(nx, ny);                   // 滑行中倍速跟着一起降下来
+        });
+        a.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override public void onAnimationEnd(android.animation.Animator animation) {
+                if (glide != animation) return;    // 被新动作打断，收尾交给打断者
+                glide = null;
+                settleAfterDrag();
+            }
+        });
+        glide = a;
+        try { a.start(); } catch (Throwable t) { glide = null; settleAfterDrag(); }
+    }
+
+    private void stopGlide() {
+        ValueAnimator a = glide;
+        glide = null;                              // 先摘掉引用，动画结束回调就不会再收尾
+        if (a != null) { try { a.cancel(); } catch (Throwable ignored) {} }
+    }
+
+    /** 拖动真正结束：落位、记住位置、回到常驻动作 */
+    private void settleAfterDrag() {
+        if (lp != null) {
+            DisplayMetrics dm = getResources().getDisplayMetrics();
+            savedX = clamp(lp.x, -charW / 4, dm.widthPixels - charW * 3 / 4);
+            savedY = clamp(lp.y, 0, dm.heightPixels - charH * 3 / 5);
+            lp.x = savedX;
+            lp.y = savedY;
+            Prefs.sp(this).edit().putInt(Prefs.K_X, savedX).putInt(Prefs.K_Y, savedY).apply();
+        }
+        js("petDragEnd()");
+    }
+
+    private static float clampf(float v, float lo, float hi) {
+        return v < lo ? lo : (v > hi ? hi : v);
+    }
+
     // ---------------------------------------------------------------- 菜单展开/收起
 
     private void expandForMenu() {
         if (expanded || !attached) return;
+        stopGlide();                       // 菜单坐标要按当前窗口位置算，先让滑行停稳
         expanded = true;
         if (rover != null) rover.cancel();
         roamKick = null;
@@ -548,13 +674,13 @@ public class PetService extends Service implements PetContainer.Host {
      * 只播一次的动作没播完？忙就跳过这一轮，等下次。
      */
     private void roamStep() {
-        if (!attached || expanded || !petVisible) return;
+        if (!attached || expanded || !petVisible || dragging || glide != null) return;
         js("petRoamReady()");
     }
 
     /** 页面确认空闲后真正开走 */
     private void doRoam() {
-        if (!attached || expanded || !petVisible) return;
+        if (!attached || expanded || !petVisible || dragging || glide != null) return;
         DisplayMetrics dm = getResources().getDisplayMetrics();
         int margin = (int) (8 * dm.density);
         int lo = margin - charW / 6;
@@ -864,7 +990,8 @@ public class PetService extends Service implements PetContainer.Host {
             // 不再对 root 设 alpha：View 层 alpha<1 会让整个子树进离屏 RenderNode，
             // 视频纹理在这条路上常被当成不透明源。透明度交给页面 CSS 的 --op。
             applyLayerMode();
-            if (attached && !expanded) {
+            // 拖动 / 惯性滑行期间不要按偏好重排窗口，否则会跟手指抢位置
+            if (attached && !expanded && !dragging && glide == null) {
                 lp.width = charW;
                 lp.height = charH;
                 restorePos();
@@ -983,7 +1110,7 @@ public class PetService extends Service implements PetContainer.Host {
             ui.post(() -> {
                 charDp = dp;
                 computeSize();
-                if (attached && !expanded) {
+                if (attached && !expanded && !dragging && glide == null) {
                     lp.width = charW;
                     lp.height = charH;
                     restorePos();
