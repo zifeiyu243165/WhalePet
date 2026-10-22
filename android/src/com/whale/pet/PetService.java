@@ -343,6 +343,8 @@ public class PetService extends Service implements PetContainer.Host {
         try {
             wm.addView(root, lp);
             attached = true;
+            expanded = false;       // 新窗口一定是小窗状态
+            menuClosing = false;
             pageReady = false;
             root.setVisibility(View.INVISIBLE);      // 等页面打开视频再显示，避免白闪
             ui.postDelayed(() -> {                   // 兜底：页面万一没回 ready 也要看得见
@@ -365,6 +367,7 @@ public class PetService extends Service implements PetContainer.Host {
 
     private void hidePet() {
         expanded = false;
+        menuClosing = false;      // 收窗中途被关掉的话，别把状态卡在"正在收"上
         stopWatch();
         if (web != null) {
             try { web.evaluateJavascript("petPause()", null); } catch (Throwable ignored) {}
@@ -487,20 +490,50 @@ public class PetService extends Service implements PetContainer.Host {
         menuClosing = true;
         if (!fromJs) js("petCloseMenu()");
         // 弹层收起动画 320ms。窗口要是立刻缩回 96dp，整块面板会被压进小窗里"糊掉"。
-        ui.postDelayed(() -> {
+        ui.postDelayed(this::beginShrink, 360);
+    }
+
+    /**
+     * 收窗第一步：让页面把角色藏起来。
+     *
+     * 窗口从全屏缩回 96dp 时，页面那几帧还按「大窗口 + 屏幕坐标」排版。以前靠一段
+     * @media 把角色的 left/top 临时改成 0/0 顶着，结果角色先出现在窗口左上角、
+     * 下一帧再跳回原位 —— 就是"从角落闪回来"那道劣质动画。
+     * 现在改成：先藏（visibility，不用 opacity，否则透明底的老问题会回来）→
+     * 页面回 android.shrinkNow() 确认这一帧已经上屏 → 才改窗口几何。
+     */
+    private void beginShrink() {
+        if (!attached || web == null) {
             menuClosing = false;
-            if (!attached) return;
             expanded = false;
-            lp.width = charW;
-            lp.height = charH;
-            lp.x = savedX;
-            lp.y = savedY;
-            pushLayout();
-            // 恢复小窗口后解除页面的屏幕坐标固定。
-            js("petMenuClosed()");
-            // 菜单期间是强制显示的，收起后立刻按当前前台重新判定
-            ui.postDelayed(() -> { if (!expanded) checkVisibleNow(); }, 120);
-        }, 360);
+            return;
+        }
+        try {
+            web.evaluateJavascript("petPreShrink()", null);
+        } catch (Throwable t) {
+            finishShrink();
+            return;
+        }
+        // 页面两帧后主动回话；rAF 万一没跑（个别 ROM 会暂停），这里兜底收窗
+        ui.postDelayed(this::finishShrink, 220);
+    }
+
+    /** 收窗第二步：把窗口缩回角色大小。可重复调用，只有第一次生效。 */
+    private void finishShrink() {
+        if (!menuClosing) return;
+        menuClosing = false;
+        if (!attached || root == null || lp == null) return;
+        expanded = false;
+        lp.width = charW;
+        lp.height = charH;
+        lp.x = savedX;
+        lp.y = savedY;
+        pushLayout();
+        // 恢复小窗口后解除页面的屏幕坐标固定。页面会自己核对视口宽度是否真的变窄，
+        // 没到位就下一帧再试 —— 宁可晚一两帧显示，也不要她先从窗外蹦进来。
+        js("petMenuClosed()");
+        // 菜单期间是强制显示的，收起后立刻按当前前台重新判定
+        ui.postDelayed(() -> { if (!expanded) checkVisibleNow(); }, 260);
     }
 
     // ---------------------------------------------------------------- 漫游
@@ -893,6 +926,12 @@ public class PetService extends Service implements PetContainer.Host {
         @JavascriptInterface
         public void closeMenu() {
             ui.post(() -> collapseMenu(true));
+        }
+
+        /** 页面确认"角色已隐藏且这一帧已经上屏"，这时才敢改窗口几何 */
+        @JavascriptInterface
+        public void shrinkNow() {
+            ui.post(PetService.this::finishShrink);
         }
 
         @JavascriptInterface

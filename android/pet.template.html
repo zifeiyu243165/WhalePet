@@ -76,6 +76,12 @@
     bottom:auto;margin-left:0;transition:none;
   }
 
+  /* 收窗过渡：窗口从全屏缩回 96dp 的那几帧，页面还按「大窗口 + 屏幕坐标」排版，
+     角色会被挤出小窗再从角落弹回原位 —— 看着就像渲染崩了。过渡期间索性把角色藏掉。
+     必须用 visibility：只要 #pet 上出现 opacity<1，整个子树就会退化成离屏合成，
+     视频纹理被当成不透明源，角色身后那块方框又会回来。 */
+  body.menu-shrink #pet{visibility:hidden}
+
   /* 命中区：椭圆裁切，四角透明处不响应 */
   #hit{
     position:absolute;left:0;top:0;width:100%;height:100%;
@@ -816,8 +822,44 @@
     requestAnimationFrame(function () { requestAnimationFrame(function () { openSheet('lib'); }); });
   };
   window.petCloseMenu = function () { closeSheet(); };
-  /** 原生把窗口缩回角色大小之后回调，这时再让角色出现才不会跳 */
-  window.petMenuClosed = function () { document.body.classList.remove('menu', 'menu-closing'); };
+  /**
+   * 缩窗前先把角色藏起来（只藏几帧）。
+   * 藏完等两帧，确认这个状态真的上屏了再让原生改窗口几何 —— 顺序反了，
+   * 缩窗那一帧页面还在用大窗口的坐标系，角色就会从窗口左上角甩回原位。
+   * 两帧等不到（个别 ROM 会暂停 rAF）就兜底直接汇报，不能把角色永久藏住。
+   */
+  window.petPreShrink = function () {
+    document.body.classList.add('menu-shrink');
+    var reported = false;
+    function report() {
+      if (reported) return;
+      reported = true;
+      clearTimeout(menuShrinkGuard);
+      if (AND && AND.shrinkNow) AND.shrinkNow();
+    }
+    requestAnimationFrame(function () { requestAnimationFrame(report); });
+    clearTimeout(menuShrinkGuard);
+    menuShrinkGuard = setTimeout(report, 160);
+  };
+  /** 原生把窗口缩回角色大小之后回调 */
+  window.petMenuClosed = function () { settleMenu(0); };
+
+  /**
+   * 解除坐标固定、显示角色。
+   * updateViewLayout 与 WebView 的 relayout 不在同一帧：窗口还没缩到位就恢复本地坐标，
+   * 角色会先被排到窗口外、下一帧再蹦回原位。所以先核对视口宽度，没到位就等下一帧；
+   * 等太久（40 帧）说明不会有缩窗了，直接收，绝不把角色永久藏住。
+   */
+  function settleMenu(tries) {
+    if (!document.body.classList.contains('menu') &&
+        !document.body.classList.contains('menu-shrink')) return;
+    if (AND && tries < 40 && window.innerWidth > (cfg.w || 96) + 2) {
+      requestAnimationFrame(function () { settleMenu(tries + 1); });
+      return;
+    }
+    clearTimeout(menuShrinkGuard);
+    document.body.classList.remove('menu', 'menu-shrink');
+  }
   window.petResume = function () {
     var v = vids[cur];
     if (cvOn) {
@@ -846,6 +888,7 @@
   var mask = document.getElementById('mask');
   var menuOpen = false;
   var menuGuard = null;
+  var menuShrinkGuard = null;   // 藏角色之后等原生收窗的兜底定时器
 
   function syncLift() {
     if (!menuOpen) return;
@@ -918,19 +961,13 @@
     clearToast();                       // 小窗只有 96dp 宽，任何浮层都会压在鲸鱼身上
     sheet.classList.remove('on');
     mask.classList.remove('on');
-    // 原生恢复小窗口之后才解除角色坐标固定；浏览器预览自行复位。
-    if (!AND) setTimeout(window.petMenuClosed, 340);
+    // 原生恢复小窗口之后才解除角色坐标固定；浏览器预览没有窗口可缩，自行复位。
     document.documentElement.style.setProperty('--lift', '0px');
+    // 缩窗由原生负责：它会先调 petPreShrink() 把角色藏起来、确认上屏再改窗口几何，
+    // 缩到位后回调 petMenuClosed()。这里绝不能再自己挪角色的 left/top ——
+    // 之前用 @media 把角色临时按到窗口左上角，正是"从角落闪回原位"的来源。
     if (AND && AND.closeMenu) AND.closeMenu();
-    // 同一帧随视口尺寸切换坐标，避免原生缩窗与 JS 回调之间闪到窗外。
-    var coordinateStyle = document.getElementById('menuCoordinates');
-    if (!coordinateStyle) {
-      coordinateStyle = document.createElement('style');
-      coordinateStyle.id = 'menuCoordinates';
-      document.head.appendChild(coordinateStyle);
-    }
-    coordinateStyle.textContent = '@media(max-width:' + (cfg.w + 1) + 'px){body.menu-closing #pet{left:0;top:0}}';
-    document.body.classList.add('menu-closing');
+    else setTimeout(window.petMenuClosed, 340);
     scheduleChatter(); scheduleRoam();
   }
   mask.addEventListener('click', function () { closeSheet(); });

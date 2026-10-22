@@ -66,10 +66,13 @@ try {
   await page.evaluate(() => petCloseMenu());
   await page.waitForTimeout(350);
   assert.equal(await page.$eval('#sheet', (e) => getComputedStyle(e).visibility), 'hidden');
+  await page.evaluate(() => petPreShrink());          // 原生缩窗前先把角色藏起来
   await page.setViewportSize({ width: 96, height: 113 });
+  assert.equal(await page.$eval('#pet', (e) => getComputedStyle(e).visibility), 'hidden');
   await page.evaluate(() => petMenuClosed());
+  await page.waitForTimeout(60);
   assert.equal(await page.$eval('#pet', (e) => getComputedStyle(e).visibility), 'visible');
-  console.log('PASS 素材带 alpha、扩窗后角色锚点不变、收起后角色恢复可见');
+  console.log('PASS 素材带 alpha、扩窗后角色锚点不变、缩窗过渡期不露角色、收起后恢复可见');
 } finally {
   await b.close();
 }

@@ -58,13 +58,22 @@ try {
       await page.$eval('#pet', (e) => { const r = e.getBoundingClientRect(); return [r.x, r.y]; }),
       [x, y]
     );
+    // 缩窗前原生会先调 petPreShrink()：这几帧角色必须是隐藏的。
+    // 只要它还在可见状态，就会按大窗口的屏幕坐标被画出来 —— 用户看到的就是
+    // "从左上角闪回原位"，像渲染崩了。
+    await page.evaluate(() => petPreShrink());
     await page.setViewportSize({ width: 96, height: 113 });
-    // 原生回调到达之前，窄视口已经切到本地坐标
-    assert.deepEqual(
-      await page.$eval('#pet', (e) => { const r = e.getBoundingClientRect(); return [r.x, r.y]; }),
-      [0, 0]
-    );
+    assert.equal(await page.$eval('#pet', (e) => getComputedStyle(e).visibility), 'hidden');
     await page.evaluate(() => petMenuClosed());
+    await page.waitForTimeout(60);
+    // 缩到位后角色回到窗口里，且正好贴在 (0,0)：中间不允许出现位移帧
+    // （角色高度 96×1.1783=113.1，窗口取整到 113，底边对齐会让 top 差 0.1px，故给容差）
+    const box = await page.$eval('#pet', (e) => {
+      const r = e.getBoundingClientRect();
+      return [Math.round(r.x * 10) / 10, Math.round(r.y * 10) / 10];
+    });
+    assert.ok(Math.abs(box[0]) < 0.6 && Math.abs(box[1]) < 0.6, `角色应贴在窗口左上角，实际 ${box}`);
+    assert.equal(await page.$eval('#pet', (e) => getComputedStyle(e).visibility), 'visible');
     assert.equal(await page.$eval('#pet', (e) => getComputedStyle(e).transitionDuration), '0s');
     assert.equal(await page.evaluate(() => petPlaying().id), before.id);
     assert.ok(await page.evaluate((t) => document.querySelector('video.on').currentTime >= t, before.time));

@@ -3,6 +3,22 @@
 版本号对应 `android/AndroidManifest.xml` 里的 `android:versionName`，括号里是 `versionCode`。
 安装包见 [Releases](https://github.com/zifeiyu243165/WhalePet/releases)。
 
+## v1.9（10）
+
+**收起动作界面不再"从角落闪回原位"**
+
+- 根因：窗口从全屏缩回 96dp 的那几帧，页面还按「大窗口 + 屏幕坐标」排版，角色被挤出小窗。
+  v1.8 用一段 `@media(max-width:97px){body.menu-closing #pet{left:0;top:0}}` 临时把她按到
+  窗口左上角顶住（还带着 `margin-left:-48px`，等于半只在窗外），于是先出现在左上角、
+  下一帧再跳回原位 —— 就是那道像渲染崩了的劣质动画
+- 新时序：`petPreShrink()` 先把角色藏起来（用 `visibility`，不用 `opacity`，否则透明底的
+  老问题会回来）→ 等两帧确认已上屏 → 页面回 `android.shrinkNow()` → 原生才改窗口几何 →
+  `petMenuClosed()` 核对视口宽度真的变窄后再解除坐标固定并显示角色
+- 全程只藏 3 帧左右（约 50ms），换来的是她"消失一下、原地出现"，而不是横穿屏幕
+- `settleMenu()` 按视口宽度重试（最多 40 帧），另有 1.2 秒级兜底，不会因为时序错乱把角色永久藏住
+- 新增 `scripts/test-menu-shrink.mjs`：逐帧采样视口宽度、可见性与角色坐标，断言窄视口下
+  任何可见帧都必须贴在原位，中间不允许有位移帧
+
 ## v1.8（9）
 
 **稳定性与减法**

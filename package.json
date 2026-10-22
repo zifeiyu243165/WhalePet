@@ -1,13 +1,13 @@
 {
   "name": "whale-pet",
   "private": true,
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "大肥鱼桌宠 —— Android 桌面悬浮鲸鱼娘，95 个透明 WebM 动作",
   "type": "module",
   "scripts": {
     "gen": "node scripts/gen-assets.mjs",
     "build": "bash scripts/build-apk.sh",
-    "test": "node scripts/test-v18.mjs && node scripts/test-shadow-menu.mjs",
+    "test": "node scripts/test-v18.mjs && node scripts/test-shadow-menu.mjs && node scripts/test-menu-shrink.mjs",
     "test:web": "node scripts/test-web.mjs",
     "alpha": "node scripts/check-alpha.mjs",
     "assets": "node scripts/fetch-assets.mjs",
