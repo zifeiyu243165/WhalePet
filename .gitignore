@@ -18,6 +18,9 @@
 # ---- 临时文件、调试截图 ----
 /.tmp/
 
+# ---- 本地工具数据（WorkBuddy 记忆/配置，不入库）----
+.workbuddy/
+
 # ---- 依赖 ----
 node_modules/
 package-lock.json
