@@ -649,18 +649,26 @@
 
   // ---------- 启动 ----------
   renderCats(); renderGrid(); syncUI();
-  play('breathing', false);
 
-  // 同目录若放了本地素材包（转码后的 assets/），优先用本地，秒开
-  if (!cfg.picked && location.protocol !== 'file:') {
-    fetch('./assets/thumb/idle/breathing.webm', { method: 'HEAD' })
-      .then(function (r) { if (r.ok && cfg.src !== 2) { cfg.src = 2; syncUI(); save(); } })
-      .catch(function () {});
-  }
-  scheduleRoam();
-  setTimeout(warm, 500);
-  if (cfg.wake) toggleWake();
-})();
+  // 同目录若放了本地素材包（转码后的 assets/），优先用本地，秒开。
+  // 探测必须赶在首帧之前：否则首帧仍会从 CDN 拉，白等一个往返。
+  // 加超时兜底：探测卡住也不能挡住页面启动。
+  var probeLocal = (!cfg.picked && location.protocol !== 'file:')
+    ? Promise.race([
+        fetch('./assets/thumb/idle/breathing.webm', { method: 'HEAD' })
+          .then(function (r) { if (r.ok && cfg.src !== 2) { cfg.src = 2; syncUI(); save(); } })
+          .catch(function () {}),
+        new Promise(function (res) { setTimeout(res, 1500); })
+      ])
+    : Promise.resolve();
+
+  probeLocal.then(function () {
+    play('breathing', false);
+    scheduleRoam();
+    setTimeout(warm, 500);
+    if (cfg.wake) toggleWake();
+  });
+}());
 </script>
 </body>
 </html>

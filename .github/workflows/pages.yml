@@ -1,0 +1,82 @@
+# 把 web/ 部署到 GitHub Pages
+#
+# 站点根 = web/ 目录（index.html / manifest.webmanifest / 图标 / assets/）
+# 访问地址：https://<用户名>.github.io/WhalePet/
+#
+# 两点说明：
+#  1. web/index.html 是生成物（.gitignore 里排除了），CI 里用
+#     `node scripts/gen-assets.mjs` 从 index.template.html + catalog.json 现场生成。
+#     该脚本只用 Node 内置模块，不需要 npm install。
+#  2. android/assets/media/thumb 里那 95 个透明 WebM 已经入库，
+#     这里复制到站点根的 assets/thumb/。页面启动时会探测同目录的
+#     assets/thumb/idle/breathing.webm，探测到就自动切本地源，
+#     于是线上不依赖 jsDelivr，切换动作也不吃 CDN 的往返延迟。
+name: Deploy web to GitHub Pages
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'web/**'
+      - 'scripts/gen-assets.mjs'
+      - 'scripts/_env.mjs'
+      - 'android/pet.template.html'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时间只跑一个部署，后来的排队而不是把前一个掐掉
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Generate web/index.html
+        run: node scripts/gen-assets.mjs
+
+      - name: Assemble site
+        run: |
+          mkdir -p site/assets
+          cp web/index.html web/manifest.webmanifest web/icon-192.png web/icon-512.png site/
+          # 95 个透明 WebM → site/assets/thumb/<分类>/<动作>.webm
+          cp -r android/assets/media/thumb site/assets/thumb
+          # Actions 部署不走 Jekyll，但加上更稳妥（避免下划线开头的目录被忽略）
+          touch site/.nojekyll
+          echo "--- site ---"
+          ls -la site
+          echo "webm 数量: $(find site/assets/thumb -name '*.webm' | wc -l)"
+          du -sh site
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
