@@ -6,6 +6,10 @@
 # 由模板 + catalog.json 生成，构建/测试时自动重建
 /android/assets/pet.html
 /web/index.html
+# 发布/本地调试用的素材副本（从 android/assets/media/thumb 复制，不入库）
+/web/assets/
+# WorkBuddy 发布记录标记（本地生成）
+/.wbapp_*.genie
 
 # ---- 构建工具链（JDK 17 + build-tools 34 + platform 34，体积近 600MB）----
 .toolchain/
