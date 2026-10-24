@@ -27,7 +27,7 @@
 | | 位置 | 说明 |
 |---|---|---|
 | **Android App**（主要） | `android/` | 悬浮在真桌面上的桌宠，可开机自启、可只显示在桌面、可导入自己的动画 |
-| **浏览器版** | `web/` | 单文件 H5，手机浏览器打开「添加到主屏幕」，不用装 App |
+| **浏览器版** | `web/` | 单文件 H5，手机浏览器打开「添加到主屏幕」，不用装 App；线上已部署到 [GitHub Pages](https://zifeiyu243165.github.io/WhalePet/) |
 
 ## 功能
 
@@ -108,10 +108,20 @@ bash scripts/build-apk.sh
 
 ### 浏览器版
 
+**线上地址：<https://zifeiyu243165.github.io/WhalePet/>** —— 手机浏览器打开即可用，支持「添加到主屏幕」变成全屏小应用。
+
+线上由 GitHub Pages 自动部署：`master` 分支一推送，GitHub Actions 就重新构建并发布
+（工作流见 `.github/workflows/pages.yml`）。站点内容 = `web/` 目录 + `android/assets/media/thumb/`
+里的 95 个透明 WebM，所以**线上不依赖 jsDelivr**，素材同源自取，首帧和切动作都是秒开。
+
+本地调试：
+
 ```bash
 node scripts/gen-assets.mjs     # 生成 web/index.html
 node scripts/serve.mjs          # 默认 8000，开完会给手机用的局域网地址
 ```
+
+> 本地 `serve.mjs` 不带素材包，页面会走 CDN；线上 Pages 带了完整素材包，页面自动切本地源。
 
 ## 目录结构
 
@@ -162,7 +172,7 @@ npm run alpha         # 三色底截图，肉眼确认角色之外透明
 - 需要「使用情况访问」才能判断当前是否桌面，这是系统级权限，必须手动去设置里开
 - 国产 ROM 的后台清理策略会杀掉前台服务，需要在自启动/后台白名单里放行
 - 动作素材共约 50MB，装完包体 51MB 左右（素材内置，离线可用）
-- `web/` 版靠 CDN 取素材，首次加载会慢一些
+- `web/` 版素材默认走 CDN；线上 Pages 版自带完整素材包，走本地源、不依赖 CDN
 
 ## 素材来源与许可
 

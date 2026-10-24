@@ -11,6 +11,19 @@
 
 ## 怎么跑起来
 
+### 线上（已部署）
+
+**<https://zifeiyu243165.github.io/WhalePet/>**
+
+手机浏览器直接打开就能用，点 Chrome 右上角菜单 →「添加到主屏幕」，
+之后从桌面图标进就是全屏无地址栏的小应用。
+
+线上由 GitHub Actions 自动部署：`master` 一推送就重新构建发布
+（工作流 `.github/workflows/pages.yml`）。站点内容 = 本目录 + `android/assets/media/thumb/`
+的 95 个透明 WebM，**不依赖 jsDelivr**，素材同源自取。
+
+### 本地
+
 `index.html` 是**生成物**（动作目录内联进去的单文件），仓库里不带，先生成再起服务：
 
 ```bash
@@ -21,7 +34,8 @@ node scripts/serve.mjs          # 默认 8000，会打印手机可用的局域�
 手机连同一个 Wi-Fi，浏览器打开脚本打印的 `http://<局域网 IP>:8000`，
 再点 Chrome 右上角菜单 →「添加到主屏幕」，之后从桌面图标进就是全屏无地址栏。
 
-> 素材走 jsDelivr，第一次点某个动作会有 0.5~2 秒加载（取决于网络和该动作体积，单个 400KB~1MB）。
+> 本地起的服务不带素材包，素材走 jsDelivr，第一次点某个动作会有 0.5~2 秒加载
+> （取决于网络和该动作体积，单个 400KB~1MB）。线上 Pages 版自带素材包，没这个等待。
 
 ## 三种素材源
 
@@ -51,6 +65,25 @@ node scripts/serve.mjs          # 默认 8000，会打印手机可用的局域�
 | `index.html` | 生成物，可直接部署的单文件（不入库） |
 | `catalog.json` | 动作目录：id / 中文名 / 分类，Android 端也用同一份 |
 | `manifest.webmanifest` · `icon-*.png` | PWA 图标，支持「添加到主屏幕」 |
+
+## 部署
+
+GitHub Pages，工作流在 `../.github/workflows/pages.yml`：
+
+```
+push master → 生成 web/index.html → 拼站点目录 → upload-pages-artifact → deploy-pages
+```
+
+站点目录 = `web/` 里的 4 个文件 + `android/assets/media/thumb/` 的 95 个 WebM
+（复制到站点根的 `assets/thumb/`），另加一个 `.nojekyll`。
+
+两点注意：
+
+- `web/index.html` 是生成物、本就不入库，CI 里现场生成；脚本只用 Node 内置模块，**不需要 npm install**
+- Pages 站点跑在子路径 `/WhalePet/` 下，页面里所有资源引用都是相对路径（`./manifest.webmanifest`、
+  `./assets/thumb/...`），换域名或换子路径都不用改代码
+
+手动触发一次部署：Actions 页面 → `Deploy web to GitHub Pages` → `Run workflow`。
 
 ## 已知限制
 
